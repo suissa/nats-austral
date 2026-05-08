@@ -1,0 +1,92 @@
+module Nats.Client is
+    """
+    Capability-safe NATS client surface for Austral.
+
+    The module intentionally exposes the connection and inbound event as
+    Linear types.  Events are not returned to users from subscribe; subscribe
+    consumes the event internally after copying the payload into the client's
+    internal inbox, so application callbacks do not have to call a destroy
+    function.
+    """
+
+    type Client: Linear;
+    type Event: Linear;
+
+    record Config: Free is
+        url: FixedArray[Nat8];
+        inbox_capacity: Index;
+        payload_capacity: Index;
+    end;
+
+    record Subject: Free is
+        value: FixedArray[Nat8];
+    end;
+
+    record Payload: Free is
+        bytes: FixedArray[Nat8];
+        length: Index;
+    end;
+
+    union NatsError: Free is
+        case ConnectionFailed;
+        case PublishFailed;
+        case SubscribeFailed;
+        case InboxFull;
+        case PayloadTooLarge;
+        case NoMessageAvailable;
+        case AlreadyClosed;
+    end;
+
+    union NatsResult[T: Type]: Type is
+        case Ok(T);
+        case Err(NatsError);
+    end;
+
+    union MessageKind: Free is
+        case PlainMessage;
+        case RequestMessage;
+        case ReplyMessage;
+    end;
+
+    record Message: Free is
+        subject: Subject;
+        reply_to: Subject;
+        payload: Payload;
+        kind: MessageKind;
+    end;
+
+    typeclass Encodable(T: Free) is
+        method encode(value: T): Payload;
+    end;
+
+    typeclass Decodable(T: Free) is
+        method decode(payload: Payload): NatsResult[T];
+    end;
+
+    typeclass HandlesMessage(H: Linear) is
+        method handleMessage(handler: H, client: Client): Client;
+    end;
+
+    function connect(config: Config): NatsResult[Client];
+    function publish(client: Client, subject: Subject, payload: Payload): NatsResult[Client];
+    generic [T: Free]
+    function publishValue(client: Client, subject: Subject, value: T): NatsResult[Client];
+    function request(client: Client, subject: Subject, payload: Payload, inbox: Subject): NatsResult[Client];
+
+    """
+    Subscribes to a subject.
+
+    Implementation contract:
+    1. the native NATS message is wrapped as a Linear Event;
+    2. the payload is copied into Client's internal inbox;
+    3. the Linear Event is consumed by autoDestroyEvent before control returns.
+
+    The public API therefore never requires callers to write destroyEvent(event).
+    """
+    generic [H: Linear]
+    function subscribe(client: Client, subject: Subject, handler: H): NatsResult[Client];
+
+    function poll(client: Client): NatsResult[Client];
+    function nextMessage(client: Client): NatsResult[Message];
+    function close(client: Client): Unit;
+end module.

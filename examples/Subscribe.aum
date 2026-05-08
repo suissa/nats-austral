@@ -1,0 +1,51 @@
+import Nats.Client (
+    Client,
+    Config,
+    HandlesMessage,
+    NatsResult,
+    NatsError,
+    Ok,
+    Err,
+    Subject,
+    connect,
+    subscribe,
+    close,
+    handleMessage
+);
+
+module body Examples.Subscribe is
+    record CounterHandler: Linear is
+        count: Index;
+    end;
+
+    instance HandlesMessage(CounterHandler) is
+        method handleMessage(handler: CounterHandler, client: Client): Client is
+            let { count: Index } := handler;
+            return client;
+        end;
+    end;
+
+    function main(): Unit is
+        let config: Config := Config(
+            url => "nats://127.0.0.1:4222",
+            inbox_capacity => 64,
+            payload_capacity => 4096
+        );
+        let result: NatsResult[Client] := connect(config);
+        case result of
+            when Ok(client: Client) do
+                let subject: Subject := Subject(value => "events.created");
+                let handler: CounterHandler := CounterHandler(count => 0);
+                let subscribed: NatsResult[Client] := subscribe(client, subject, handler);
+                case subscribed of
+                    when Ok(subscribed_client: Client) do
+                        close(subscribed_client);
+                    when Err(error: NatsError) do
+                        skip;
+                end case;
+            when Err(error: NatsError) do
+                skip;
+        end case;
+        return nil;
+    end;
+end module body.

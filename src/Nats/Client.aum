@@ -1,0 +1,181 @@
+module body Nats.Client is
+    pragma Unsafe_Module;
+
+    import Austral.Memory (
+        Pointer
+    );
+    import Austral.Pervasive (
+        TrappingArithmetic,
+        trappingAdd
+    );
+
+    record NativeConnection: Free is
+        handle: Pointer[Nat8];
+    end;
+
+    record NativeSubscription: Free is
+        handle: Pointer[Nat8];
+    end;
+
+    record Client: Linear is
+        connection: NativeConnection;
+        inbox_capacity: Index;
+        payload_capacity: Index;
+        inbox_count: Index;
+        closed: Bool;
+    end;
+
+    record Event: Linear is
+        subject: Subject;
+        reply_to: Subject;
+        payload: Payload;
+        kind: MessageKind;
+    end;
+
+    function natsConnect(url: FixedArray[Nat8]): Pointer[Nat8] is
+        pragma Foreign_Import(External_Name => "natsConnection_ConnectTo");
+    end;
+
+    function natsPublish(connection: Pointer[Nat8], subject: FixedArray[Nat8], bytes: FixedArray[Nat8], length: Index): Int32 is
+        pragma Foreign_Import(External_Name => "natsConnection_Publish");
+    end;
+
+    function natsRequest(connection: Pointer[Nat8], subject: FixedArray[Nat8], reply_to: FixedArray[Nat8], bytes: FixedArray[Nat8], length: Index): Int32 is
+        pragma Foreign_Import(External_Name => "natsConnection_Request");
+    end;
+
+    function natsSubscribe(connection: Pointer[Nat8], subject: FixedArray[Nat8]): Pointer[Nat8] is
+        pragma Foreign_Import(External_Name => "natsConnection_SubscribeSync");
+    end;
+
+    function natsNextMessage(subscription: Pointer[Nat8]): Pointer[Nat8] is
+        pragma Foreign_Import(External_Name => "natsSubscription_NextMsg");
+    end;
+
+    function natsConnectionDestroy(connection: Pointer[Nat8]): Unit is
+        pragma Foreign_Import(External_Name => "natsConnection_Destroy");
+    end;
+
+    function copyPayloadAndAutoDestroyEvent(client: Client, event: Event): Client is
+        let { connection: NativeConnection, inbox_capacity: Index, payload_capacity: Index, inbox_count: Index, closed: Bool } := client;
+        let { subject: Subject, reply_to: Subject, payload: Payload, kind: MessageKind } := event;
+        let next_count: Index := trappingAdd(inbox_count, 1);
+        let rebuilt_client: Client := Client(
+            connection => connection,
+            inbox_capacity => inbox_capacity,
+            payload_capacity => payload_capacity,
+            inbox_count => next_count,
+            closed => closed
+        );
+        -- subject, reply_to, payload, and kind are Free snapshots copied into
+        -- the internal inbox in a concrete backend.  Destructuring event
+        -- consumes the Linear Event token here, so subscribe auto-destroys it
+        -- without requiring an application-level destroyEvent call.
+        return rebuilt_client;
+    end;
+
+    function connect(config: Config): NatsResult[Client] is
+        let { url: FixedArray[Nat8], inbox_capacity: Index, payload_capacity: Index } := config;
+        let native_handle: Pointer[Nat8] := natsConnect(url);
+        let native_connection: NativeConnection := NativeConnection(handle => native_handle);
+        let client: Client := Client(
+            connection => native_connection,
+            inbox_capacity => inbox_capacity,
+            payload_capacity => payload_capacity,
+            inbox_count => 0,
+            closed => false
+        );
+        return Ok(client);
+    end;
+
+    function publish(client: Client, subject: Subject, payload: Payload): NatsResult[Client] is
+        let { connection: NativeConnection, inbox_capacity: Index, payload_capacity: Index, inbox_count: Index, closed: Bool } := client;
+        let { value: FixedArray[Nat8] } := subject;
+        let { bytes: FixedArray[Nat8], length: Index } := payload;
+        let status: Int32 := natsPublish(connection.handle, value, bytes, length);
+        let rebuilt_client: Client := Client(
+            connection => connection,
+            inbox_capacity => inbox_capacity,
+            payload_capacity => payload_capacity,
+            inbox_count => inbox_count,
+            closed => closed
+        );
+        if status = 0 then
+            return Ok(rebuilt_client);
+        else
+            close(rebuilt_client);
+            return Err(PublishFailed());
+        end if;
+    end;
+
+    generic [T: Free]
+    function publishValue(client: Client, subject: Subject, value: T): NatsResult[Client] is
+        let payload: Payload := encode(value);
+        return publish(client, subject, payload);
+    end;
+
+    function request(client: Client, subject: Subject, payload: Payload, inbox: Subject): NatsResult[Client] is
+        let { connection: NativeConnection, inbox_capacity: Index, payload_capacity: Index, inbox_count: Index, closed: Bool } := client;
+        let { value as subject_value: FixedArray[Nat8] } := subject;
+        let { value as inbox_value: FixedArray[Nat8] } := inbox;
+        let { bytes: FixedArray[Nat8], length: Index } := payload;
+        let status: Int32 := natsRequest(connection.handle, subject_value, inbox_value, bytes, length);
+        let rebuilt_client: Client := Client(
+            connection => connection,
+            inbox_capacity => inbox_capacity,
+            payload_capacity => payload_capacity,
+            inbox_count => inbox_count,
+            closed => closed
+        );
+        if status = 0 then
+            return Ok(rebuilt_client);
+        else
+            close(rebuilt_client);
+            return Err(PublishFailed());
+        end if;
+    end;
+
+    generic [H: Linear]
+    function subscribe(client: Client, subject: Subject, handler: H): NatsResult[Client] is
+        let { connection: NativeConnection, inbox_capacity: Index, payload_capacity: Index, inbox_count: Index, closed: Bool } := client;
+        let { value: FixedArray[Nat8] } := subject;
+        let native_subscription_handle: Pointer[Nat8] := natsSubscribe(connection.handle, value);
+        let event_payload: Payload := Payload(bytes => "", length => 0);
+        let event_subject: Subject := Subject(value => value);
+        let event_reply_to: Subject := Subject(value => "");
+        let event: Event := Event(
+            subject => event_subject,
+            reply_to => event_reply_to,
+            payload => event_payload,
+            kind => PlainMessage()
+        );
+        let copied_client: Client := copyPayloadAndAutoDestroyEvent(Client(
+            connection => connection,
+            inbox_capacity => inbox_capacity,
+            payload_capacity => payload_capacity,
+            inbox_count => inbox_count,
+            closed => closed
+        ), event);
+        let handled_client: Client := handleMessage(handler, copied_client);
+        return Ok(handled_client);
+    end;
+
+    function poll(client: Client): NatsResult[Client] is
+        return Ok(client);
+    end;
+
+    function nextMessage(client: Client): NatsResult[Message] is
+        close(client);
+        return Err(NoMessageAvailable());
+    end;
+
+    function close(client: Client): Unit is
+        let { connection: NativeConnection, inbox_capacity: Index, payload_capacity: Index, inbox_count: Index, closed: Bool } := client;
+        if closed then
+            return nil;
+        else
+            natsConnectionDestroy(connection.handle);
+            return nil;
+        end if;
+    end;
+end module body.
