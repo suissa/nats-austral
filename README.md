@@ -29,6 +29,18 @@ module. The `subscribe` function copies the payload into the internal state of
 the Linear `Client`, then consumes the event at the module boundary. Application
 code therefore does not need, and cannot forget, an explicit event-destroy call.
 
+## Tests
+
+Run the source-level contract tests with:
+
+```sh
+python3 -m pytest
+```
+
+The tests verify the Linear event lifecycle, Typeclass and ADT declarations,
+safe arithmetic usage, and absence of forbidden runtime constructs in the
+Austral sources.
+
 ## Build status
 
 This repository is a source-level Austral implementation. The current container

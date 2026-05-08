@@ -79,9 +79,9 @@ module Nats.Client is
     Implementation contract:
     1. the native NATS message is wrapped as a Linear Event;
     2. the payload is copied into Client's internal inbox;
-    3. the Linear Event is consumed by autoDestroyEvent before control returns.
+    3. the Linear Event is consumed internally before control returns.
 
-    The public API therefore never requires callers to write destroyEvent(event).
+    The public API therefore never requires callers to write an event-destroy call.
     """
     generic [H: Linear]
     function subscribe(client: Client, subject: Subject, handler: H): NatsResult[Client];
