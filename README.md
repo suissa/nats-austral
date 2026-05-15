@@ -46,3 +46,7 @@ Austral sources.
 This repository is a source-level Austral implementation. The current container
 does not include the Austral compiler, so syntax and integration checks are
 limited to repository-level validation unless `austral` is installed.
+
+## Zig server prototype
+
+Veja `natzig/` para uma implementação de servidor NATS em Zig e testes com client NATS existente (`nats-py`).
